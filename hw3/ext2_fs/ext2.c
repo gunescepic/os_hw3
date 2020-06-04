@@ -17,6 +17,53 @@ char fs_name[] = "ext2";
 
 /* Implement functions in s_op, i_op, f_op here */
 
+struct ext2_super_block superblock;
+struct ext2_group_desc group_descr;
+unsigned long blockSize;
+
+
+struct super_block *fst_get_superblock(struct file_system_type *fs){
+  struct super_block *super_b;
+  super_b = (super_block *)malloc(sizeof(struct superblock))
+  struct ext2_super_block ext2_super_b = malloc(sizeof(struct ext2_super_block));
+  lseek(myfs.file_descriptor, BASE_OFFSET, SEEK_SET);
+
+  read(myfs.file_descriptor, &ext2_super_b, sizeof(struct ext2_super_block));
+  superblock = ext2_super_b;
+  super_b -> s_inodes_count = ext2_super_b -> s_inodes_count;
+  super_b -> s_blocks_count = ext2_super_b -> s_blocks_count;
+  super_b -> s_free_blocks_count = ext2_super_b -> s_free_blocks_count;
+  super_b -> s_free_inodes_count = ext2_super_b -> s_free_inodes_count;
+  super_b -> s_first_data_block = ext2_super_b -> s_first_data_block;
+  super_b -> s_blocksize = 2^(ext2_super_b -> s_log_block_size);
+  super_b -> s_blocksize_bits = ext2_super_b -> s_log_block_size;
+  super_b -> s_blocks_per_group = ext2_super_b -> s_blocks_per_group;
+  super_b -> s_inodes_per_group = ext2_super_b -> s_inodes_per_group;
+  super_b -> s_minor_rev_level = ext2_super_b -> s_minor_rev_level;
+  super_b -> s_rev_level = ext2_super_b -> s_rev_level;
+  super_b -> s_first_ino = ext2_super_b -> s_first_ino;
+  super_b -> s_inode_size = ext2_super_b -> s_inode_size;
+  super_b -> s_block_group_nr = ext2_super_b -> s_block_group_nr;
+  super_b -> s_maxbytes = ext2_super_b -> s_maxbytes;
+  super_b -> s_magic = ext2_super_b -> s_magic;
+
+
+  struct file_system_type *s_type;  /* Pointer to file system type */
+  struct super_operations *s_op;    /* Pointer to super operations */
+  struct dentry *s_root;            /* Directory entry for root */
+  void *s_fs_info;                  /* Filesystem private info */
+
+  blockSize = super_b -> s_blocksize;
+  lseek(myfs.file_descriptor, BASE_OFFSET + blockSize, SEEK_SET);
+  read(myfs.file_descriptor, &group_descr, sizeof(ext2_group_desc));
+}
+
+unsigned int block_offset(unsigned int nblocks) {
+
+    return block_size * (nblocks-1);
+}
+
+
 /* file operations to implement:*/
 loffset_t fop_llseek(struct file *f, loffset_t o, int whence){
   loffset_t resulting_offset;
@@ -36,7 +83,7 @@ int fop_open(struct inode *i, struct file *f){
   unsigned int *ptrs_to_datablocks = i -> i_block;
   //Reading Single PTR and get direct ptrs;
   int fd = myfs -> file_descriptor;
-  unsigned long blockSize = myfs->get_superblock(myfs) -> s_blocksize;
+  
   for (int j = 0; j < BLOCK_SIZE/4; j++)
   {
       if (ptrs_to_datablocks[j])
@@ -63,17 +110,64 @@ int iop_readdir(struct inode *i, filldir_t callback){
 int iop_getattr(struct dentry *dir, struct kstat *stats){}
 
 /*superblock operations to implement:*/
-void sop_read_inode(struct inode *i){}
-int sop_statfs(struct super_block *sb, struct kstatfs *stats){}
 
-struct super_block *fst_get_superblock(struct file_system_type *fs){
-  //I have started to implement this function as I understood
-  struct super_block *super_b;
-  super_b = (super_block *)malloc(sizeof(struct superblock))
-  lseek(myfs.file_descriptor, BASE_OFFSET, SEEK_SET);
-  read(myfs.file_descriptor, &super_b, sizeof(struct super_block));
+
+/*This function assumes that only the inode number field
+( i_ino ) of the passed in inode i is valid and 
+the fucntion reads and populates the remaining
+fields of i .*/
+void sop_read_inode(struct inode *i){
+  unsigned long inode_num = i-> i_no;
+  int fd = myfs.file_descriptor;
+  //1024--superblock--2048-- k (1024x1024/blocksize)-- 2xblocksize -- blocksize x inode_num
+  unsigned int blocksize =  myfs.get_superblock(myfs)-> s_blocksize;
+  int seeked_fd = lseek(fd, BASE_OFFSET + block_offset(group_descr.bg_inode_table) + (inode_num - 1) * sizeof(struct ext2_inode), SEEK_SET);
+  struct ext2_inode *ext2_node;
+  ext2_node = malloc(sizeof(struct ext2_inode));
+  read(seeked_fd, &ext2_node,sizeof(struct ext2_inode));
+
+  i -> i_mode = ext2_node -> i_mode;
+  i -> i_nlink = ext2_node -> i_links_count;
+  i -> i_uid = ext2_node -> i_uid;
+  i -> i_gid = ext2_node -> i_gid;
+  i -> i_size = ext2_node -> i_size;
+
+  i -> i_size = ext2_node -> i_size;
+  i -> i_atime = ext2_node -> i_atime;
+  i -> i_mtime = ext2_node -> i_mtime;
+  i -> i_ctime = ext2_node -> i_ctime;
+
+  i -> i_blocks = ext2_node -> i_blocks;
+  i -> i_block = ext2_node -> i_block;
+  i -> i_op =NULL;//?
+  i -> f_op =NULL;//?
+  i -> i_sb = myfs.get_superblock(myfs);//?
+
+  i -> i_flags = ext2_node -> i_flags;
+  // i -> i_state = ext2_node -> ??;
 
 }
+
+int sop_statfs(struct super_block *sb, struct kstatfs *stats){
+  stats = (struct kstatfs *)malloc(sizeof(kstatfs));
+  stats -> f_magic = sb -> s_magic;
+  stats -> f_bsize = sb -> s_blocksize;
+  stats -> f_blocks = sb -> s_blocks_count;
+  stats -> f_bfree = sb -> s_free_blocks_count;
+  stats -> f_inodes = sb -> s_inodes_count;
+  stats -> f_finodes = sb -> s_free_inodes_count;
+  stats -> f_inode_size = sb -> s_inode_size;
+  stats -> f_minor_rev_level = sb -> s_minor_rev_level;
+  stats -> f_rev_level = sb -> s_rev_level;
+  stats -> f_inode_size = sb -> s_inode_size;
+
+  stats -> name = fs_name;
+  stats -> f_namelen = strlen(fs_name);
+  return 0;
+
+}
+
+
 
 struct file_system_type *initialize_ext2(const char *image_path) {
   /* fill super_operations s_op */
