@@ -35,7 +35,7 @@ struct super_block *fst_get_superblock(struct file_system_type *fs){
   super_b -> s_free_blocks_count = ext2_super_b -> s_free_blocks_count;
   super_b -> s_free_inodes_count = ext2_super_b -> s_free_inodes_count;
   super_b -> s_first_data_block = ext2_super_b -> s_first_data_block;
-  super_b -> s_blocksize = 2^(ext2_super_b -> s_log_block_size);
+  super_b -> s_blocksize = 1024 << ext2_super_b -> s_log_block_size;
   super_b -> s_blocksize_bits = ext2_super_b -> s_log_block_size;
   super_b -> s_blocks_per_group = ext2_super_b -> s_blocks_per_group;
   super_b -> s_inodes_per_group = ext2_super_b -> s_inodes_per_group;
@@ -46,10 +46,9 @@ struct super_block *fst_get_superblock(struct file_system_type *fs){
   super_b -> s_block_group_nr = ext2_super_b -> s_block_group_nr;
   super_b -> s_maxbytes = ext2_super_b -> s_maxbytes;
   super_b -> s_magic = ext2_super_b -> s_magic;
+  suber_b -> s_type = myfs;
+  suber_b -> s_op = s_op;
 
-
-  struct file_system_type *s_type;  /* Pointer to file system type */
-  struct super_operations *s_op;    /* Pointer to super operations */
   struct dentry *s_root;            /* Directory entry for root */
   void *s_fs_info;                  /* Filesystem private info */
 
@@ -58,26 +57,27 @@ struct super_block *fst_get_superblock(struct file_system_type *fs){
   read(myfs.file_descriptor, &group_descr, sizeof(ext2_group_desc));
 }
 
-unsigned int block_offset(unsigned int nblocks) {
-
-    return block_size * (nblocks-1);
+unsigned int block_offset(unsigned int num_of_blocks) {
+    return BASE_OFFSET + block_size * (num_of_blocks-1);
 }
-
 
 /* file operations to implement:*/
 loffset_t fop_llseek(struct file *f, loffset_t o, int whence){
-  loffset_t resulting_offset;
-  resulting_offset = lseek(f->file_descriptor, o, whence);
-  return resulting_offset;
+	
+    // inode_table = (struct ext2_inode*)malloc(sizeof(struct ext2_inode)*superblock.s_inodes_per_group);
+    struct inode_of_file = f.f_inode;
+    unsigned long inode_num = inode_of_file.i_ino;
+    loffset_t resulting_offset;
+    lseek(myfs.file_descriptor, block_offset(group_descr.bg_inode_table + inode_num + o),whence);
+}
+
+ssize_t fop_read(struct file *f, char *buf, size_t len, loffset_t *o){
   //filein inodeuna git, inodeun datablocklarina git tek tek bul.
   //offset/blocksize kac blok atlamam gerekiyor? bi de modunu alcaksin
   //blockun icindeki offseti bulmak icin
-}
-ssize_t fop_read(struct file *f, char *buf, size_t len, loffset_t *o){
-  int fd = f->file_descriptor;
-  loffset_t offset = lseek(fd, o, SEEK_SET);
-  read(fd, &buf, len);
-  return sizeof(buf); //or len??
+ 	direct_pointers = (unsigned int*)malloc(blockSize);
+    single_pointers = (unsigned int*)malloc(blockSize);
+    double_pointers = (unsigned int*)malloc(blockSize);
 }
 int fop_open(struct inode *i, struct file *f){
   unsigned int *ptrs_to_datablocks = i -> i_block;
@@ -121,7 +121,7 @@ void sop_read_inode(struct inode *i){
   int fd = myfs.file_descriptor;
   //1024--superblock--2048-- k (1024x1024/blocksize)-- 2xblocksize -- blocksize x inode_num
   unsigned int blocksize =  myfs.get_superblock(myfs)-> s_blocksize;
-  int seeked_fd = lseek(fd, BASE_OFFSET + block_offset(group_descr.bg_inode_table) + (inode_num - 1) * sizeof(struct ext2_inode), SEEK_SET);
+  int seeked_fd = lseek(fd, block_offset(group_descr.bg_inode_table) + (inode_num - 1) * sizeof(struct ext2_inode), SEEK_SET);
   struct ext2_inode *ext2_node;
   ext2_node = malloc(sizeof(struct ext2_inode));
   read(seeked_fd, &ext2_node,sizeof(struct ext2_inode));
@@ -139,13 +139,11 @@ void sop_read_inode(struct inode *i){
 
   i -> i_blocks = ext2_node -> i_blocks;
   i -> i_block = ext2_node -> i_block;
-  i -> i_op =NULL;//?
-  i -> f_op =NULL;//?
-  i -> i_sb = myfs.get_superblock(myfs);//?
+  i -> i_op =i_op;
+  i -> f_op =s_op;
+  i -> i_sb = myfs.get_superblock(myfs);
 
   i -> i_flags = ext2_node -> i_flags;
-  // i -> i_state = ext2_node -> ??;
-
 }
 
 int sop_statfs(struct super_block *sb, struct kstatfs *stats){
@@ -168,7 +166,6 @@ int sop_statfs(struct super_block *sb, struct kstatfs *stats){
 }
 
 
-
 struct file_system_type *initialize_ext2(const char *image_path) {
   /* fill super_operations s_op */
   /* fill inode_operations i_op */
@@ -179,11 +176,29 @@ struct file_system_type *initialize_ext2(const char *image_path) {
         .statfs = your_statfs_function,
       };
   */
+  s_op = (struct super_operations){
+	    .read_inode = sop_read_inode,
+	    .statfs = sop_statfs,
+	  };
+  i_op = (struct inode_operations){
+        .readlink = iop_readlink,
+        .readdir = iop_readdir,
+        .lookup = iop_lookup,
+        .iop_getattr = iop_getattr,
+      };
+  f_op = (struct file_operations){
+        .llseek = fop_llseek,
+        .read = fop_read,
+        .open = fop_open,
+        .release = fop_release,
+      };
+
   myfs.name = fs_name;
   myfs.file_descriptor = open(image_path, O_RDONLY);
   /* assign get_superblock function
      for example:
         myfs.get_superblock = your_get_superblock;
   */
+  myfs.get_superblock = fst_get_superblock;
   return &myfs;
 }
